@@ -147,7 +147,7 @@ export default function LikePage() {
 
       <section>
         <h2 className="text-lg font-semibold mb-2">Logs</h2>
-        <div className="h-48 overflow-auto border border-gray-300 rounded p-2 bg-gray-50 text-sm whitespace-pre-wrap">
+        <div className="h-48 overflow-auto border border-gray-300 rounded p-2 bg-gray-50 text-sm whitespace-pre-wrap text-black">
           {logs.length === 0 ? "No logs yet." : logs.join("\n")}
         </div>
       </section>

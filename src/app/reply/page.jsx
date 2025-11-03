@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState, useEffect } from "react";
 
 const BASE = process.env.NEXT_PUBLIC_API || "https://localhost:8443";
 
-// 汎用 JSON fetch
+// fetch(JSON) ヘルパ
 async function jsonFetch(url, options = {}) {
   const res = await fetch(url, { credentials: "include", ...options });
   if (!res.ok) {
@@ -15,7 +15,7 @@ async function jsonFetch(url, options = {}) {
   return ct.includes("application/json") ? res.json() : null;
 }
 
-// Cookie 読み
+// Cookie 読み出し（withHttpOnlyFalse 前提）
 function readCookie(name) {
   if (typeof document === "undefined") return "";
   const hit = document.cookie
@@ -25,53 +25,7 @@ function readCookie(name) {
   return hit ? decodeURIComponent(hit.split("=").slice(1).join("=")) : "";
 }
 
-// File → data:URL
-function readAsDataURL(file) {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload = () => resolve(String(fr.result || ""));
-    fr.onerror = (e) => reject(e);
-    fr.readAsDataURL(file);
-  });
-}
-
-// data:URL から画像メタ
-async function getImageMetaFromDataUrl(dataUrl) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () =>
-      resolve({
-        width: img.naturalWidth || img.width || null,
-        height: img.naturalHeight || img.height || null,
-      });
-    img.onerror = () => resolve({ width: null, height: null });
-    img.src = dataUrl;
-  });
-}
-
-// File から動画メタ
-async function getVideoMetaFromFile(file) {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
-    const video = document.createElement("video");
-    video.preload = "metadata";
-    video.onloadedmetadata = () => {
-      resolve({
-        width: video.videoWidth || null,
-        height: video.videoHeight || null,
-        durationMs: Number.isFinite(video.duration)
-          ? Math.round(video.duration * 1000)
-          : null,
-      });
-      URL.revokeObjectURL(url);
-    };
-    video.onerror = () => {
-      URL.revokeObjectURL(url);
-      resolve({ width: null, height: null, durationMs: null });
-    };
-    video.src = url;
-  });
-}
+// 以前の Base64 関連のヘルパー関数は削除しました。
 
 export default function ReplyPage() {
   const [accessToken, setAccessToken] = useState("");
@@ -87,13 +41,30 @@ export default function ReplyPage() {
     []
   );
 
+  // Cookie から CSRF を読むロジックは維持
+  const getCsrf = useCallback(async () => {
+    const fromCookie = typeof document !== "undefined" ? readCookie("XSRF-TOKEN") : "";
+    if (fromCookie) return fromCookie;
+
+    try {
+      await fetch(`${BASE}/v1/auth/csrf`, { credentials: "include" });
+    } catch (_) {
+      // ネットワークエラーは無視し、最後にもう一度 Cookie を読む
+    }
+    return typeof document !== "undefined" ? readCookie("XSRF-TOKEN") : "";
+  }, []);
+
   // 初回に XSRF-TOKEN を Cookie に発行
   useEffect(() => {
-    fetch(`${BASE}/v1/auth/csrf`, { credentials: "include" }).catch(() => {});
-  }, []);
+    // CSRFトークンの取得を試みる (getCsrf内で実行されるため、ここでは不要だが念のため維持)
+    getCsrf();
+  }, [getCsrf]);
 
   const onFilesSelected = useCallback((e) => {
     const files = Array.from(e.target.files || []);
+    // 古い Blob URL を解放
+    previews.forEach(p => URL.revokeObjectURL(p.url)); 
+
     setSelectedFiles(files);
     setPreviews(
       files.map((f) => {
@@ -102,6 +73,7 @@ export default function ReplyPage() {
           : f.type.startsWith("image/")
           ? "image"
           : "other";
+        // プレビュー用に Blob URL を生成
         return {
           kind,
           url: URL.createObjectURL(f),
@@ -111,63 +83,15 @@ export default function ReplyPage() {
         };
       })
     );
-  }, []);
-
-  const buildMediasPayload = useCallback(async () => {
-    const payload = [];
-    for (const file of selectedFiles) {
-      const isImg = file.type.startsWith("image/");
-      const isVid = file.type.startsWith("video/");
-      if (!isImg && !isVid) {
-        appendLog(`skip unsupported: ${file.type} (${file.name})`);
-        continue;
-      }
-
-      const dataUrl = await readAsDataURL(file);
-      if (!dataUrl || !dataUrl.startsWith("data:")) {
-        appendLog(`[NG] dataUrl not generated for ${file.name}`);
-        throw new Error("dataUrl generation failed");
-      }
-      appendLog(
-        `[OK] dataUrl generated: ${file.name} (${dataUrl.slice(0, 32)}…)`
-      );
-
-      let width = null,
-        height = null,
-        durationMs = null;
-      try {
-        if (isImg) {
-          const m = await getImageMetaFromDataUrl(dataUrl);
-          width = m.width;
-          height = m.height;
-        } else {
-          const m = await getVideoMetaFromFile(file);
-          width = m.width;
-          height = m.height;
-          durationMs = m.durationMs;
-        }
-      } catch (e) {
-        appendLog(`meta error: ${file.name} - ${e.message}`);
-      }
-
-      // サーバは SNAKE_CASE を受け取る前提
-      payload.push({
-        data_url: dataUrl,
-        mime_type: file.type || undefined,
-        width: width ?? undefined,
-        height: height ?? undefined,
-        duration_ms: durationMs ?? undefined,
-      });
-    }
-    appendLog(`[DEBUG] medias built: ${payload.length}`);
-    return payload;
-  }, [selectedFiles, appendLog]);
+  }, [previews]); // previewsを依存配列に追加してBlob URLを適切に管理
 
   const canSubmit = useMemo(() => {
     const hasContent = content.trim().length > 0;
-    const hasReplyId = String(replyToId).trim().length > 0;
+    // replyToIdが空でないことを確認
+    const hasReplyId = String(replyToId).trim().length > 0 && !isNaN(Number(replyToId)); 
     return !loading && !!accessToken && hasContent && hasReplyId;
   }, [loading, accessToken, content, replyToId]);
+
 
   const handleSubmit = useCallback(
     async (e) => {
@@ -178,43 +102,53 @@ export default function ReplyPage() {
       appendLog("[REPLY] start");
 
       try {
-        const csrf = readCookie("XSRF-TOKEN");
+        const csrf = await getCsrf(); // CSRFトークンをここで取得
+        const targetTweetId = String(replyToId).trim();
+        
+        if (!targetTweetId) {
+             throw new Error("Reply ID is missing.");
+        }
+        
         appendLog(
           `[DEBUG] csrf=${csrf ? csrf.slice(0, 8) + "…" : "(empty)"} files=${
             selectedFiles.length
-          } replyTo=${replyToId}`
+          } replyTo=${targetTweetId}`
         );
 
-        const medias = await buildMediasPayload();
-        if (selectedFiles.length > 0 && medias.length === 0) {
-          throw new Error("No medias built for selected files");
-        }
-        if (medias[0]?.data_url) {
-          appendLog(
-            `[DEBUG] medias[0].data_url head=${medias[0].data_url.slice(
-              0,
-              32
-            )}…`
-          );
-        }
-
-        // ★ 返信先を in_reply_to_tweet で送る（SNAKE_CASE）
-        const body = {
-          content,
-          in_reply_to_tweet: Number(replyToId),
-          medias,
+        const formData = new FormData();
+        
+        // 1. PostFormのJSONデータパートを作成 (サーバーの @RequestPart("postForm") に対応)
+        const postFormPayload = {
+          content: content,
+          // ★ スネークケースで記述。Controllerの@RequestPart分離により、in_reply_to_tweetは不要だが、
+          // DTOが保持している場合のために含める
+          in_reply_to_tweet: Number(targetTweetId), 
         };
+        
+        // JSONをBlobとしてFormDataに追加 (Content-Type: application/json パートとして送信)
+        formData.append(
+          "postForm", 
+          new Blob([JSON.stringify(postFormPayload)], { type: "application/json" })
+        );
+        
+        // 2. 選択された各ファイルを追加 (サーバーの List<MultipartFile> mediaFiles に対応)
+        selectedFiles.forEach((file) => {
+          // サーバーが期待するフィールド名: "mediaFiles"
+          formData.append("mediaFiles", file, file.name); 
+        });
 
-        const res = await fetch(`${BASE}/v1/tweets/${replyToId}/reply`, {
+        // 3. APIコール
+        // URLは /v1/tweets/{tweetId}/reply を使用
+        const res = await fetch(`${BASE}/v1/tweets/${targetTweetId}/reply`, {
           method: "POST",
           credentials: "include",
           headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            Authorization: `Bearer ${accessToken}`,
+            "Accept": "application/json",
+            "Authorization": `Bearer ${accessToken}`,
             "X-XSRF-TOKEN": csrf || "",
+            // Content-TypeはFormDataを使用するため設定しない
           },
-          body: JSON.stringify(body),
+          body: formData,
         });
 
         if (!res.ok) {
@@ -226,6 +160,8 @@ export default function ReplyPage() {
         // リセット
         setContent("");
         setReplyToId("");
+        // Blob URLの解放
+        previews.forEach(p => URL.revokeObjectURL(p.url));
         setSelectedFiles([]);
         setPreviews([]);
       } catch (err) {
@@ -234,7 +170,7 @@ export default function ReplyPage() {
         setLoading(false);
       }
     },
-    [canSubmit, content, replyToId, accessToken, selectedFiles.length, buildMediasPayload, appendLog]
+    [canSubmit, content, replyToId, accessToken, selectedFiles, getCsrf, appendLog, previews]
   );
 
   return (
@@ -314,6 +250,8 @@ export default function ReplyPage() {
             onClick={() => {
               setContent("");
               setReplyToId("");
+              // Blob URLの解放
+              previews.forEach(p => URL.revokeObjectURL(p.url));
               setSelectedFiles([]);
               setPreviews([]);
               appendLog("[UI] cleared");

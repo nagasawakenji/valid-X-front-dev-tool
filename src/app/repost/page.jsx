@@ -1,7 +1,6 @@
-
-
 // src/app/repost/page.jsx
 "use client";
+const BASE = process.env.NEXT_PUBLIC_API || "https://localhost:8443";
 import React, { useState } from "react";
 
 function getCookie(name) {
@@ -27,7 +26,7 @@ export default function RepostPage() {
     const xsrfToken = getCookie("XSRF-TOKEN");
     try {
       const res = await fetch(
-        `/v1/tweets/${tweetId}/repost`,
+        `${BASE}/v1/tweets/${tweetId}/repost`,
         {
           method,
           headers: {
@@ -119,7 +118,7 @@ export default function RepostPage() {
                 {entry.msg}
               </span>
               {entry.details && (
-                <pre className="bg-gray-200 rounded p-2 mt-1 overflow-x-auto">
+                <pre className="bg-gray-200 rounded p-2 mt-1 overflow-x-auto text-black">
                   {typeof entry.details === "string"
                     ? entry.details
                     : JSON.stringify(entry.details, null, 2)}

@@ -175,7 +175,7 @@ const buildMediasPayload = useCallback(async () => {
   setLoading(true);
   appendLog("[POST] start");
   try {
-    const csrf = readCookie("XSRF-TOKEN"); // ここでは cookie 直読みでもOK
+    const csrf = await getCsrf();
     appendLog(`[DEBUG] csrf=${csrf ? csrf.slice(0,8)+"…" : "(empty)"} files=${selectedFiles.length}`);
 
     const medias = await buildMediasPayload();
